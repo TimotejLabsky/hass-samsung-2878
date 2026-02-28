@@ -43,6 +43,10 @@ class Samsung2878State:
     preset: str = "Off"
     outdoor_temp: float | None = None
     error: str = ""
+    auto_clean: bool = False
+    sleep_timer: int = 0
+    used_watt: float | None = None
+    filter_use_time: int | None = None
     raw: dict[str, str] = field(default_factory=dict)
 
 
@@ -89,6 +93,31 @@ def _parse_state(attrs: dict[str, str]) -> Samsung2878State:
         state.error = ""
     else:
         state.error = error
+
+    # Auto clean
+    state.auto_clean = attrs.get("AC_ADD_AUTOCLEAN", "Off") == "On"
+
+    # Sleep timer (minutes)
+    try:
+        state.sleep_timer = int(attrs.get("AC_FUN_SLEEP", "0"))
+    except (ValueError, TypeError):
+        state.sleep_timer = 0
+
+    # Power usage (raw / 10.0 = kWh)
+    raw_watt = attrs.get("AC_ADD2_USEDWATT")
+    if raw_watt is not None:
+        try:
+            state.used_watt = float(raw_watt) / 10.0
+        except (ValueError, TypeError):
+            state.used_watt = None
+
+    # Filter usage time (hours)
+    raw_filter = attrs.get("AC_ADD2_FILTER_USE_TIME")
+    if raw_filter is not None:
+        try:
+            state.filter_use_time = int(raw_filter)
+        except (ValueError, TypeError):
+            state.filter_use_time = None
 
     return state
 
@@ -234,6 +263,14 @@ class Samsung2878Client:
     async def set_preset(self, preset: str) -> None:
         """Set the convenient mode (Off, Quiet, Sleep, Smart, SoftCool)."""
         await self._set_control({"AC_FUN_COMODE": preset})
+
+    async def set_auto_clean(self, on: bool) -> None:
+        """Enable or disable auto clean."""
+        await self._set_control({"AC_ADD_AUTOCLEAN": "On" if on else "Off"})
+
+    async def set_sleep_timer(self, minutes: int) -> None:
+        """Set the sleep timer (0 = off, 1-420 minutes)."""
+        await self._set_control({"AC_FUN_SLEEP": str(minutes)})
 
     async def _set_control(self, attrs: dict[str, str]) -> None:
         """Send a DeviceControl command."""
