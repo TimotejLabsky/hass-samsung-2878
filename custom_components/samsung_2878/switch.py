@@ -29,7 +29,10 @@ async def async_setup_entry(
         manufacturer="Samsung",
         model="AC 2878 (AR12HSFSAWKN)",
     )
-    async_add_entities([AutoCleanSwitch(coordinator, mac, device_info)])
+    async_add_entities([
+        AutoCleanSwitch(coordinator, mac, device_info),
+        SPISwitch(coordinator, mac, device_info),
+    ])
 
 
 class AutoCleanSwitch(
@@ -68,4 +71,41 @@ class AutoCleanSwitch(
         await self.coordinator.send_command(
             self.coordinator.client.set_auto_clean, False,
             optimistic={"auto_clean": False},
+        )
+
+
+class SPISwitch(CoordinatorEntity[Samsung2878Coordinator], SwitchEntity):
+    """SPI (ionizer) switch."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Ionizer"
+    _attr_icon = "mdi:air-purifier"
+
+    def __init__(
+        self,
+        coordinator: Samsung2878Coordinator,
+        mac: str,
+        device_info: DeviceInfo,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{mac}_spi"
+        self._attr_device_info = device_info
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if ionizer is on."""
+        return self.coordinator.data.spi
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on ionizer."""
+        await self.coordinator.send_command(
+            self.coordinator.client.set_spi, True,
+            optimistic={"spi": True},
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off ionizer."""
+        await self.coordinator.send_command(
+            self.coordinator.client.set_spi, False,
+            optimistic={"spi": False},
         )

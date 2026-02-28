@@ -10,7 +10,14 @@ from .client import Samsung2878Client
 from .const import CONF_DUID, CONF_TOKEN, DOMAIN
 from .coordinator import Samsung2878Coordinator
 
-PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.SENSOR, Platform.SWITCH]
+PLATFORMS = [
+    Platform.BUTTON,
+    Platform.CLIMATE,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

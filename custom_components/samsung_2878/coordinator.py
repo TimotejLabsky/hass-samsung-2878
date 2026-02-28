@@ -32,6 +32,7 @@ class Samsung2878Coordinator(DataUpdateCoordinator[Samsung2878State]):
             update_interval=timedelta(seconds=DEFAULT_POLL_INTERVAL),
         )
         self.client = client
+        self._sw_info: dict[str, str] | None = None
 
     async def _async_update_data(self) -> Samsung2878State:
         """Fetch data from the AC."""
@@ -39,7 +40,17 @@ class Samsung2878Coordinator(DataUpdateCoordinator[Samsung2878State]):
             if not self.client.connected:
                 await self.client.connect()
                 await self.client.authenticate()
-            return await self.client.get_status()
+                self._sw_info = None  # Re-fetch after reconnect
+            state = await self.client.get_status()
+            # Fetch SW info once per connection
+            if self._sw_info is None:
+                try:
+                    self._sw_info = await self.client.get_sw_info()
+                except Exception:  # noqa: BLE001
+                    self._sw_info = {}
+            state.panel_version = self._sw_info.get("panel_version")
+            state.outdoor_version = self._sw_info.get("outdoor_version")
+            return state
         except Samsung2878AuthError as err:
             await self.client.disconnect()
             raise UpdateFailed(f"Authentication failed: {err}") from err

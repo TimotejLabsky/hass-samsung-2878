@@ -47,6 +47,14 @@ class Samsung2878State:
     sleep_timer: int = 0
     used_watt: float | None = None
     filter_use_time: int | None = None
+    spi: bool = False
+    used_power: int | None = None
+    used_time: int | None = None
+    cool_capability: int | None = None
+    warm_capability: int | None = None
+    panel_version: str | None = None
+    outdoor_version: str | None = None
+    filter_time: int | None = None
     raw: dict[str, str] = field(default_factory=dict)
 
 
@@ -118,6 +126,48 @@ def _parse_state(attrs: dict[str, str]) -> Samsung2878State:
             state.filter_use_time = int(raw_filter)
         except (ValueError, TypeError):
             state.filter_use_time = None
+
+    # SPI (ionizer)
+    state.spi = attrs.get("AC_ADD_SPI", "Off") == "On"
+
+    # Used power (lifetime kWh)
+    raw_used_power = attrs.get("AC_ADD2_USEDPOWER")
+    if raw_used_power is not None:
+        try:
+            state.used_power = int(raw_used_power)
+        except (ValueError, TypeError):
+            state.used_power = None
+
+    # Used time (operating hours)
+    raw_used_time = attrs.get("AC_ADD2_USEDTIME")
+    if raw_used_time is not None:
+        try:
+            state.used_time = int(raw_used_time)
+        except (ValueError, TypeError):
+            state.used_time = None
+
+    # Cool/warm capability
+    raw_cool = attrs.get("AC_COOL_CAPABILITY")
+    if raw_cool is not None:
+        try:
+            state.cool_capability = int(raw_cool)
+        except (ValueError, TypeError):
+            state.cool_capability = None
+
+    raw_warm = attrs.get("AC_WARM_CAPABILITY")
+    if raw_warm is not None:
+        try:
+            state.warm_capability = int(raw_warm)
+        except (ValueError, TypeError):
+            state.warm_capability = None
+
+    # Filter time threshold (hours)
+    raw_filter_time = attrs.get("AC_ADD2_FILTERTIME")
+    if raw_filter_time is not None:
+        try:
+            state.filter_time = int(raw_filter_time)
+        except (ValueError, TypeError):
+            state.filter_time = None
 
     return state
 
@@ -271,6 +321,94 @@ class Samsung2878Client:
     async def set_sleep_timer(self, minutes: int) -> None:
         """Set the sleep timer (0 = off, 1-420 minutes)."""
         await self._set_control({"AC_FUN_SLEEP": str(minutes)})
+
+    async def set_spi(self, on: bool) -> None:
+        """Enable or disable SPI (ionizer)."""
+        await self._set_control({"AC_ADD_SPI": "On" if on else "Off"})
+
+    async def set_filter_time(self, hours: int) -> None:
+        """Set filter replacement threshold (180, 300, 500, 700 hours)."""
+        await self._set_control({"AC_ADD2_FILTERTIME": str(hours)})
+
+    async def clear_filter_alarm(self) -> None:
+        """Clear the filter cleaning alarm."""
+        await self._set_control({"AC_ADD_CLEAR_FILTER_ALARM": "On"})
+
+    async def get_sw_info(self) -> dict[str, str]:
+        """Request software version information."""
+        xml = '<Request Type="GetSWInfo"></Request>\r\n'
+        response = await self._send_command(xml, "GetSWInfo")
+        result: dict[str, str] = {}
+        try:
+            root = ET.fromstring(response)
+            sw = root.find("SwInfo")
+            if sw is not None:
+                result["sw_version"] = sw.get("Version", "")
+            panel = root.find("PannelInfo")
+            if panel is not None:
+                result["panel_version"] = panel.get("Version", "")
+            outdoor = root.find("OutDoorInfo")
+            if outdoor is not None:
+                result["outdoor_version"] = outdoor.get("Version", "")
+        except ET.ParseError:
+            _LOGGER.warning("Failed to parse GetSWInfo: %s", response)
+        return result
+
+    async def get_power_logging_mode(self) -> str:
+        """Get current power logging mode."""
+        xml = '<Request Type="GetPowerLoggingMode"></Request>\r\n'
+        response = await self._send_command(xml, "GetPowerLoggingMode")
+        try:
+            root = ET.fromstring(response)
+            return root.get("Mode", "Unknown")
+        except ET.ParseError:
+            return "Unknown"
+
+    async def set_power_logging_mode(self, enable: bool) -> None:
+        """Enable or disable power logging."""
+        mode = "Enable" if enable else "Disable"
+        xml = f'<Request Type="SetPowerLoggingMode" Mode="{mode}"></Request>\r\n'
+        await self._send_command(xml, "SetPowerLoggingMode")
+
+    async def reset_power_logging(self) -> None:
+        """Reset power logging data."""
+        xml = '<Request Type="ResetPowerLogging"></Request>\r\n'
+        await self._send_command(xml, "ResetPowerLogging")
+
+    async def get_power_usage(
+        self, date_from: str, date_to: str, unit: str = "Day"
+    ) -> list[dict[str, str]]:
+        """Get power usage data for a date range.
+
+        date_from/date_to format: yy-MM-dd HH:mm
+        unit: Hour or Day
+        """
+        xml = (
+            f'<Request Type="GetPowerUsage">'
+            f'<PowerUsage from="{date_from}" to="{date_to}" Unit="{unit}" />'
+            f"</Request>\r\n"
+        )
+        response = await self._send_command(xml, "GetPowerUsage")
+        entries: list[dict[str, str]] = []
+        try:
+            root = ET.fromstring(response)
+            for usage in root.iter("Usage"):
+                entry = {}
+                for attr_name in ("Date", "Usage", "Time"):
+                    val = usage.get(attr_name)
+                    if val is not None:
+                        entry[attr_name.lower()] = val
+                if entry:
+                    entries.append(entry)
+        except ET.ParseError:
+            _LOGGER.warning("Failed to parse GetPowerUsage: %s", response)
+        return entries
+
+    async def send_raw_xml(self, xml: str) -> str:
+        """Send raw XML command and return the response."""
+        if not xml.endswith("\r\n"):
+            xml += "\r\n"
+        return await self._send_command(xml, None)
 
     async def _set_control(self, attrs: dict[str, str]) -> None:
         """Send a DeviceControl command."""
