@@ -1,0 +1,9 @@
+{
+  "domain": "samsung_2878",
+  "name": "Samsung 2878 AC",
+  "codeowners": ["@TimotejLabsky"],
+  "config_flow": true,
+  "documentation": "https://github.com/TimotejLabsky/hass-samsung-2878",
+  "iot_class": "local_polling",
+  "version": "1.0.0"
+}

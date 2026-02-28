@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Samsung 2878 AC",
+        "description": "Enter your Samsung AC connection details.",
+        "data": {
+          "host": "IP Address",
+          "port": "Port",
+          "token": "Token",
+          "mac": "MAC Address"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the AC. Check the IP address and port.",
+      "invalid_auth": "Invalid token. Re-pair the AC to get a new token.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This AC is already configured."
+    }
+  }
+}
