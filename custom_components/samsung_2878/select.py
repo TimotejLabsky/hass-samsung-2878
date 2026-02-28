@@ -43,7 +43,6 @@ class FilterTimeSelect(
     _attr_icon = "mdi:air-filter"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = FILTER_TIME_OPTIONS
-    _attr_native_unit_of_measurement = "h"
 
     def __init__(
         self,
