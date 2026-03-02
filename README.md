@@ -1,5 +1,9 @@
 # Samsung 2878 AC Integration for Home Assistant
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=TimotejLabsky&repository=hass-samsung-2878&category=integration)
+
 Custom Home Assistant integration for Samsung air conditioners using the port 2878 protocol (AC14K / Jungfrau series).
 
 Fully async, config-flow based replacement for the legacy [samsungrac](https://github.com/SebuZet/samsungrac) integration.
