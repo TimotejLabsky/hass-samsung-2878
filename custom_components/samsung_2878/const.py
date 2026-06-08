@@ -20,6 +20,7 @@ CONF_PORT = "port"
 CONF_TOKEN = "token"
 CONF_MAC = "mac"
 CONF_DUID = "duid"
+CONF_SWING_MODES = "swing_modes"
 
 # Samsung protocol mode values -> HA HVACMode
 HVAC_MODE_MAP: dict[str, HVACMode] = {
@@ -47,6 +48,15 @@ SWING_MODE_REVERSE: dict[str, str] = {
     SWING_VERTICAL: "SwingUD",
     SWING_HORIZONTAL: "SwingLR",
     SWING_BOTH: "Rotation",
+}
+# All HA swing modes this protocol can express, in display order.
+ALL_SWING_MODES: list[str] = list(SWING_MODE_REVERSE.keys())
+# Human-readable labels for the options flow multi-select.
+SWING_MODE_LABELS: dict[str, str] = {
+    SWING_OFF: "Off",
+    SWING_VERTICAL: "Vertical (up / down)",
+    SWING_HORIZONTAL: "Horizontal (left / right)",
+    SWING_BOTH: "Both (rotation)",
 }
 
 # Preset modes

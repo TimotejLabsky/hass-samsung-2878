@@ -18,7 +18,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    ALL_SWING_MODES,
     CONF_MAC,
+    CONF_SWING_MODES,
     DOMAIN,
     FAN_MODES,
     HVAC_MODE_MAP,
@@ -62,7 +64,6 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
     )
     _attr_hvac_modes = [HVACMode.OFF, *HVAC_MODE_MAP.values()]
     _attr_fan_modes = FAN_MODES
-    _attr_swing_modes = list(SWING_MODE_REVERSE.keys())
     _attr_preset_modes = PRESET_MODES
     _enable_turn_on_off_backwards_compat = False
 
@@ -71,6 +72,15 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
     ) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = entry.data[CONF_MAC]
+        # Limit swing modes to those the user marked as physically supported.
+        # Many wall-mount units have only a vertical louver; an empty/absent
+        # option falls back to all modes for backwards compatibility.
+        configured = entry.options.get(CONF_SWING_MODES)
+        self._attr_swing_modes = (
+            [m for m in ALL_SWING_MODES if m in configured]
+            if configured
+            else list(ALL_SWING_MODES)
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.data[CONF_MAC])},
             name=entry.title,
