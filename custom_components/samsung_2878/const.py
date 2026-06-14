@@ -15,6 +15,13 @@ DEFAULT_POLL_INTERVAL = 30
 TEMP_MIN = 16
 TEMP_MAX = 30
 
+# Values a register returns to mean "not supported / no data" on this firmware.
+# 0xFE00, 0xFFFF and 0x8000 are the placeholders Samsung ACs use for unimplemented
+# numeric registers (e.g. AC_ADD2_USEDWATT reports 65024 == AC_ADD2_VERSION on the
+# AR12HSFS, which has no instantaneous-power meter). All are far outside any real
+# reading, so guarding them never drops a genuine value.
+SENTINEL_VALUES = frozenset({65024, 65535, 32768})
+
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_TOKEN = "token"

@@ -99,7 +99,7 @@ def format_state_table(state: Samsung2878State) -> str:
     lines.append(f"{'Ionizer (SPI)':<24} {'On' if state.spi else 'Off'}")
     lines.append(f"{'Sleep timer':<24} {state.sleep_timer} min")
     if state.used_watt is not None:
-        lines.append(f"{'Energy usage':<24} {state.used_watt} kWh")
+        lines.append(f"{'Power draw':<24} {state.used_watt} W")
     if state.used_power is not None:
         lines.append(f"{'Lifetime energy':<24} {state.used_power} kWh")
     if state.used_time is not None:
@@ -109,9 +109,9 @@ def format_state_table(state: Samsung2878State) -> str:
     if state.filter_time is not None:
         lines.append(f"{'Filter threshold':<24} {state.filter_time} h")
     if state.cool_capability is not None:
-        lines.append(f"{'Cool capability':<24} {state.cool_capability}")
+        lines.append(f"{'Cool capability':<24} {state.cool_capability} kW")
     if state.warm_capability is not None:
-        lines.append(f"{'Warm capability':<24} {state.warm_capability}")
+        lines.append(f"{'Warm capability':<24} {state.warm_capability} kW")
     if state.panel_version:
         lines.append(f"{'Panel version':<24} {state.panel_version}")
     if state.outdoor_version:
@@ -124,7 +124,7 @@ def format_state_table(state: Samsung2878State) -> str:
         "AC_FUN_SLEEP", "AC_ADD_AUTOCLEAN", "AC_ADD_SPI", "AC_ADD2_USEDWATT",
         "AC_ADD2_USEDPOWER", "AC_ADD2_USEDTIME", "AC_ADD2_FILTER_USE_TIME",
         "AC_ADD2_FILTERTIME", "AC_OUTDOOR_TEMP", "AC_COOL_CAPABILITY",
-        "AC_WARM_CAPABILITY",
+        "AC_WARM_CAPABILITY", "AC_ADD2_PANEL_VERSION", "AC_ADD2_OUT_VERSION",
     }
     extra = {k: v for k, v in raw.items() if k not in known_keys}
     if extra:

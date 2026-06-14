@@ -8,7 +8,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfTemperature, UnitOfTime
+from homeassistant.const import (
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTemperature,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -33,18 +38,28 @@ async def async_setup_entry(
         manufacturer="Samsung",
         model="AC 2878 (AR12HSFSAWKN)",
     )
-    async_add_entities([
-        OutdoorTemperatureSensor(coordinator, mac, device_info),
-        ErrorSensor(coordinator, mac, device_info),
-        PowerUsageSensor(coordinator, mac, device_info),
-        FilterUsageSensor(coordinator, mac, device_info),
-        UsedPowerSensor(coordinator, mac, device_info),
-        UsedTimeSensor(coordinator, mac, device_info),
-        CoolCapabilitySensor(coordinator, mac, device_info),
-        WarmCapabilitySensor(coordinator, mac, device_info),
-        PanelVersionSensor(coordinator, mac, device_info),
-        OutdoorVersionSensor(coordinator, mac, device_info),
-    ])
+    # ErrorSensor is always present; every other sensor is created only when the
+    # device actually reports that register, so unsupported values (which the AC
+    # returns as sentinels and the client parses to None) never appear in HA.
+    data = coordinator.data
+    entities: list[SensorEntity] = [ErrorSensor(coordinator, mac, device_info)]
+    optional: list[tuple[type[SensorEntity], object]] = [
+        (OutdoorTemperatureSensor, data.outdoor_temp),
+        (PowerSensor, data.used_watt),
+        (FilterUsageSensor, data.filter_use_time),
+        (UsedPowerSensor, data.used_power),
+        (UsedTimeSensor, data.used_time),
+        (CoolCapabilitySensor, data.cool_capability),
+        (WarmCapabilitySensor, data.warm_capability),
+        (PanelVersionSensor, data.panel_version),
+        (OutdoorVersionSensor, data.outdoor_version),
+    ]
+    entities.extend(
+        cls(coordinator, mac, device_info)
+        for cls, value in optional
+        if value is not None
+    )
+    async_add_entities(entities)
 
 
 class OutdoorTemperatureSensor(
@@ -98,16 +113,21 @@ class ErrorSensor(CoordinatorEntity[Samsung2878Coordinator], SensorEntity):
         return self.coordinator.data.error or "OK"
 
 
-class PowerUsageSensor(
+class PowerSensor(
     CoordinatorEntity[Samsung2878Coordinator], SensorEntity
 ):
-    """Total power usage sensor."""
+    """Instantaneous power draw sensor (AC_ADD2_USEDWATT, watts).
+
+    This is a live power measurement, not cumulative energy. For lifetime
+    energy (kWh) use UsedPowerSensor. Models without a power meter report a
+    sentinel value, in which case this entity is not created.
+    """
 
     _attr_has_entity_name = True
-    _attr_name = "Energy usage"
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_name = "Power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
 
     def __init__(
         self,
@@ -116,12 +136,12 @@ class PowerUsageSensor(
         device_info: DeviceInfo,
     ) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{mac}_energy"
+        self._attr_unique_id = f"{mac}_power"
         self._attr_device_info = device_info
 
     @property
-    def native_value(self) -> float | None:
-        """Return energy usage in kWh."""
+    def native_value(self) -> int | None:
+        """Return instantaneous power draw in watts."""
         return self.coordinator.data.used_watt
 
 
@@ -212,6 +232,8 @@ class CoolCapabilitySensor(
 
     _attr_has_entity_name = True
     _attr_name = "Cooling capability"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:snowflake"
 
@@ -226,8 +248,8 @@ class CoolCapabilitySensor(
         self._attr_device_info = device_info
 
     @property
-    def native_value(self) -> int | None:
-        """Return cooling capability."""
+    def native_value(self) -> float | None:
+        """Return rated cooling capability in kW."""
         return self.coordinator.data.cool_capability
 
 
@@ -238,6 +260,8 @@ class WarmCapabilitySensor(
 
     _attr_has_entity_name = True
     _attr_name = "Heating capability"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:fire"
 
@@ -252,8 +276,8 @@ class WarmCapabilitySensor(
         self._attr_device_info = device_info
 
     @property
-    def native_value(self) -> int | None:
-        """Return heating capability."""
+    def native_value(self) -> float | None:
+        """Return rated heating capability in kW."""
         return self.coordinator.data.warm_capability
 
 
