@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import ssl
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -16,6 +17,24 @@ CERT_PATH = Path(__file__).parent / "ac14k_m.pem"
 CONNECT_TIMEOUT = 10
 IO_TIMEOUT = 10
 MAX_RESPONSE_LINES = 10
+
+# Placeholders the AC sends for registers it does not implement. Kept in sync
+# with const.SENTINEL_VALUES, duplicated here so the CLI can load client.py
+# standalone without pulling in Home Assistant. See const.py for rationale.
+SENTINEL_VALUES = frozenset({65024, 65535, 32768})
+
+
+def _int_or_none(raw: str | None, *, guard_sentinel: bool = True) -> int | None:
+    """Parse an int register, returning None for missing/garbage/sentinel values."""
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        return None
+    if guard_sentinel and value in SENTINEL_VALUES:
+        return None
+    return value
 
 
 class Samsung2878Error(Exception):
@@ -45,13 +64,13 @@ class Samsung2878State:
     error: str = ""
     auto_clean: bool = False
     sleep_timer: int = 0
-    used_watt: float | None = None
+    used_watt: int | None = None  # instantaneous power draw, watts
     filter_use_time: int | None = None
     spi: bool = False
-    used_power: int | None = None
+    used_power: int | None = None  # lifetime energy, kWh
     used_time: int | None = None
-    cool_capability: int | None = None
-    warm_capability: int | None = None
+    cool_capability: float | None = None  # rated cooling output, kW
+    warm_capability: float | None = None  # rated heating output, kW
     panel_version: str | None = None
     outdoor_version: str | None = None
     filter_time: int | None = None
@@ -111,63 +130,35 @@ def _parse_state(attrs: dict[str, str]) -> Samsung2878State:
     except (ValueError, TypeError):
         state.sleep_timer = 0
 
-    # Power usage (raw / 10.0 = kWh)
-    raw_watt = attrs.get("AC_ADD2_USEDWATT")
-    if raw_watt is not None:
-        try:
-            state.used_watt = float(raw_watt) / 10.0
-        except (ValueError, TypeError):
-            state.used_watt = None
+    # Instantaneous power draw (watts). Unsupported on some models, which report
+    # a sentinel (e.g. 65024 on the AR12HSFS) -> dropped by _int_or_none.
+    state.used_watt = _int_or_none(attrs.get("AC_ADD2_USEDWATT"))
 
     # Filter usage time (hours)
-    raw_filter = attrs.get("AC_ADD2_FILTER_USE_TIME")
-    if raw_filter is not None:
-        try:
-            state.filter_use_time = int(raw_filter)
-        except (ValueError, TypeError):
-            state.filter_use_time = None
+    state.filter_use_time = _int_or_none(attrs.get("AC_ADD2_FILTER_USE_TIME"))
 
     # SPI (ionizer)
     state.spi = attrs.get("AC_ADD_SPI", "Off") == "On"
 
-    # Used power (lifetime kWh)
-    raw_used_power = attrs.get("AC_ADD2_USEDPOWER")
-    if raw_used_power is not None:
-        try:
-            state.used_power = int(raw_used_power)
-        except (ValueError, TypeError):
-            state.used_power = None
+    # Lifetime energy (kWh) and operating time (hours)
+    state.used_power = _int_or_none(attrs.get("AC_ADD2_USEDPOWER"))
+    state.used_time = _int_or_none(attrs.get("AC_ADD2_USEDTIME"))
 
-    # Used time (operating hours)
-    raw_used_time = attrs.get("AC_ADD2_USEDTIME")
-    if raw_used_time is not None:
-        try:
-            state.used_time = int(raw_used_time)
-        except (ValueError, TypeError):
-            state.used_time = None
-
-    # Cool/warm capability
-    raw_cool = attrs.get("AC_COOL_CAPABILITY")
-    if raw_cool is not None:
-        try:
-            state.cool_capability = int(raw_cool)
-        except (ValueError, TypeError):
-            state.cool_capability = None
-
-    raw_warm = attrs.get("AC_WARM_CAPABILITY")
-    if raw_warm is not None:
-        try:
-            state.warm_capability = int(raw_warm)
-        except (ValueError, TypeError):
-            state.warm_capability = None
+    # Rated cool/warm capability, reported in tenths of a kW (35 -> 3.5 kW)
+    raw_cool = _int_or_none(attrs.get("AC_COOL_CAPABILITY"))
+    state.cool_capability = raw_cool / 10.0 if raw_cool is not None else None
+    raw_warm = _int_or_none(attrs.get("AC_WARM_CAPABILITY"))
+    state.warm_capability = raw_warm / 10.0 if raw_warm is not None else None
 
     # Filter time threshold (hours)
-    raw_filter_time = attrs.get("AC_ADD2_FILTERTIME")
-    if raw_filter_time is not None:
-        try:
-            state.filter_time = int(raw_filter_time)
-        except (ValueError, TypeError):
-            state.filter_time = None
+    state.filter_time = _int_or_none(attrs.get("AC_ADD2_FILTERTIME"))
+
+    # Firmware versions are exposed directly in DeviceState; prefer these over
+    # the GetSWInfo request, which returns malformed XML on this firmware.
+    panel = attrs.get("AC_ADD2_PANEL_VERSION")
+    state.panel_version = str(panel) if panel else None
+    outdoor = attrs.get("AC_ADD2_OUT_VERSION")
+    state.outdoor_version = str(outdoor) if outdoor else None
 
     return state
 
@@ -338,19 +329,19 @@ class Samsung2878Client:
         """Request software version information."""
         xml = '<Request Type="GetSWInfo"></Request>\r\n'
         response = await self._send_command(xml, "GetSWInfo")
+        # The device returns malformed XML (unclosed <PannelInfo>/<OutDoorInfo>
+        # tags), so ET.fromstring fails. Extract each Version attribute by regex
+        # instead. Note the device's tag is "SWInfo", not "SwInfo".
         result: dict[str, str] = {}
-        try:
-            root = ET.fromstring(response)
-            sw = root.find("SwInfo")
-            if sw is not None:
-                result["sw_version"] = sw.get("Version", "")
-            panel = root.find("PannelInfo")
-            if panel is not None:
-                result["panel_version"] = panel.get("Version", "")
-            outdoor = root.find("OutDoorInfo")
-            if outdoor is not None:
-                result["outdoor_version"] = outdoor.get("Version", "")
-        except ET.ParseError:
+        for tag, key in (
+            ("SWInfo", "sw_version"),
+            ("PannelInfo", "panel_version"),
+            ("OutDoorInfo", "outdoor_version"),
+        ):
+            match = re.search(rf'<{tag}\b[^>]*\bVersion="([^"]*)"', response)
+            if match:
+                result[key] = match.group(1)
+        if not result:
             _LOGGER.warning("Failed to parse GetSWInfo: %s", response)
         return result
 
@@ -392,14 +383,17 @@ class Samsung2878Client:
         entries: list[dict[str, str]] = []
         try:
             root = ET.fromstring(response)
-            for usage in root.iter("Usage"):
-                entry = {}
-                for attr_name in ("Date", "Usage", "Time"):
-                    val = usage.get(attr_name)
-                    if val is not None:
-                        entry[attr_name.lower()] = val
-                if entry:
-                    entries.append(entry)
+            # Device emits <PowerUsage Date=".." PowerUsage="kwh" UsageTime="min" />;
+            # PowerUsage="-1" means no data was logged for that period.
+            for usage in root.iter("PowerUsage"):
+                usage_val = usage.get("PowerUsage")
+                if usage_val is None or usage_val == "-1":
+                    continue
+                entries.append({
+                    "date": usage.get("Date", ""),
+                    "usage": usage_val,
+                    "time": usage.get("UsageTime", ""),
+                })
         except ET.ParseError:
             _LOGGER.warning("Failed to parse GetPowerUsage: %s", response)
         return entries
