@@ -67,8 +67,8 @@ class Samsung2878State:
     used_watt: int | None = None  # instantaneous power draw, watts
     filter_use_time: int | None = None
     spi: bool = False
-    used_power: int | None = None  # lifetime energy, kWh
-    used_time: int | None = None
+    used_power: float | None = None  # lifetime energy, kWh
+    used_time: float | None = None  # lifetime operating time, hours
     cool_capability: float | None = None  # rated cooling output, kW
     warm_capability: float | None = None  # rated heating output, kW
     panel_version: str | None = None
@@ -140,9 +140,18 @@ def _parse_state(attrs: dict[str, str]) -> Samsung2878State:
     # SPI (ionizer)
     state.spi = attrs.get("AC_ADD_SPI", "Off") == "On"
 
-    # Lifetime energy (kWh) and operating time (hours)
-    state.used_power = _int_or_none(attrs.get("AC_ADD2_USEDPOWER"))
-    state.used_time = _int_or_none(attrs.get("AC_ADD2_USEDTIME"))
+    # Lifetime energy (kWh) and operating time (hours). Like the capability
+    # registers below, these are fixed-point in tenths: AC_ADD2_USEDPOWER is
+    # 0.1 kWh/count and AC_ADD2_USEDTIME is 0.1 h/count (matching the documented
+    # "AC_ADD2_USEDWATT raw/10 = kWh" convention). Taking them raw over-reported
+    # by 10x; e.g. 6404 -> 640.4 kWh, 10820 -> 1082.0 h. The 10x raw scale is
+    # also physically impossible for time (the counter "gained" 330 h over a
+    # 240 h wall-clock window) and implied a ~5.9 kW average draw on a 3.5 kW
+    # unit; /10 yields a sane ~0.59 kW average. See PROTOCOL.md.
+    raw_used_power = _int_or_none(attrs.get("AC_ADD2_USEDPOWER"))
+    state.used_power = raw_used_power / 10.0 if raw_used_power is not None else None
+    raw_used_time = _int_or_none(attrs.get("AC_ADD2_USEDTIME"))
+    state.used_time = raw_used_time / 10.0 if raw_used_time is not None else None
 
     # Rated cool/warm capability, reported in tenths of a kW (35 -> 3.5 kW)
     raw_cool = _int_or_none(attrs.get("AC_COOL_CAPABILITY"))

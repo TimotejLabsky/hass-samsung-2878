@@ -194,7 +194,7 @@ class UsedPowerSensor(CoordinatorEntity[Samsung2878Coordinator], SensorEntity):
         self._attr_device_info = device_info
 
     @property
-    def native_value(self) -> int | None:
+    def native_value(self) -> float | None:
         """Return lifetime energy usage in kWh."""
         return self.coordinator.data.used_power
 
@@ -220,7 +220,7 @@ class UsedTimeSensor(CoordinatorEntity[Samsung2878Coordinator], SensorEntity):
         self._attr_device_info = device_info
 
     @property
-    def native_value(self) -> int | None:
+    def native_value(self) -> float | None:
         """Return operating time in hours."""
         return self.coordinator.data.used_time
 

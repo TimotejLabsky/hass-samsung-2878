@@ -396,18 +396,25 @@ Status values: `Ready` (waiting for button press), `Completed` (token issued)
 ### Extended Functions (AC_ADD2_*)
 | ID | Field | Values |
 |----|-------|--------|
-| AC_ADD2_USEDWATT | usedWatt | Raw/10.0 = kWh |
+| AC_ADD2_USEDWATT | usedWatt | Instantaneous power meter, Raw/10. **Unsupported on AR12HSFS** (reports the 65024 sentinel = AC_ADD2_VERSION). |
+| AC_ADD2_USEDPOWER | usedPower | Lifetime energy. **Raw/10.0 = kWh** (e.g. 6404 -> 640.4 kWh). |
+| AC_ADD2_USEDTIME | usedTime | Lifetime operating time. **Raw/10.0 = hours** (e.g. 10820 -> 1082.0 h). |
 | AC_ADD2_OPTIONCODE | optionCode | (hex string) |
 | AC_ADD2_FILTERTIME | filterTime | 180, 300, 500, 700 (hours) |
 | AC_ADD2_FILTER_USE_TIME | filterUseTime | (hours) |
 | AC_ADD2_CLEAR_POWERTIME | clearPowerTime | (value) |
 
+> **Fixed-point convention:** the cumulative meter registers (`USEDWATT`,
+> `USEDPOWER`, `USEDTIME`) and the capability registers below all encode values
+> in tenths — divide the raw integer by 10. Taking `USEDPOWER`/`USEDTIME` raw
+> over-reports lifetime energy and runtime by 10x.
+
 ### Outdoor Unit
 | ID | Field | Values |
 |----|-------|--------|
 | AC_OUTDOOR_TEMP | outdoorTemp | Raw-55 = Celsius |
-| AC_COOL_CAPABILITY | coolCapability | (value) |
-| AC_WARM_CAPABILITY | heatCapability | (value) |
+| AC_COOL_CAPABILITY | coolCapability | Raw/10.0 = kW (35 -> 3.5 kW) |
+| AC_WARM_CAPABILITY | heatCapability | Raw/10.0 = kW (40 -> 4.0 kW) |
 
 ---
 

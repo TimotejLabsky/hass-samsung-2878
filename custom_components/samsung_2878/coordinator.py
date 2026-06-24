@@ -34,19 +34,38 @@ class Samsung2878Coordinator(DataUpdateCoordinator[Samsung2878State]):
         self.client = client
 
     async def _async_update_data(self) -> Samsung2878State:
-        """Fetch data from the AC."""
+        """Fetch data from the AC.
+
+        The AC silently drops its idle TLS socket between our 30s polls, so the
+        first read on a stale connection times out ("Read timeout"). That made
+        the entity flap to ``unavailable`` for a poll on every reconnect. We now
+        absorb the transient: on a connection error, drop the socket and retry
+        once with a fresh connection before surfacing the failure.
+        """
         try:
-            if not self.client.connected:
-                await self.client.connect()
-                await self.client.authenticate()
-            # Firmware versions are parsed from DeviceState (see _parse_state).
-            return await self.client.get_status()
+            return await self._poll_once()
         except Samsung2878AuthError as err:
             await self.client.disconnect()
             raise UpdateFailed(f"Authentication failed: {err}") from err
         except Samsung2878ConnectionError as err:
+            _LOGGER.debug("Poll failed (%s); reconnecting and retrying once", err)
             await self.client.disconnect()
-            raise UpdateFailed(f"Connection failed: {err}") from err
+            try:
+                return await self._poll_once()
+            except Samsung2878AuthError as err2:
+                await self.client.disconnect()
+                raise UpdateFailed(f"Authentication failed: {err2}") from err2
+            except Samsung2878ConnectionError as err2:
+                await self.client.disconnect()
+                raise UpdateFailed(f"Connection failed: {err2}") from err2
+
+    async def _poll_once(self) -> Samsung2878State:
+        """Connect if needed and fetch one DeviceState snapshot."""
+        if not self.client.connected:
+            await self.client.connect()
+            await self.client.authenticate()
+        # Firmware versions are parsed from DeviceState (see _parse_state).
+        return await self.client.get_status()
 
     async def send_command(
         self,
