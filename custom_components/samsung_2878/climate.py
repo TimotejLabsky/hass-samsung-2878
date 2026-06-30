@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -13,6 +14,7 @@ from homeassistant.components.climate import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -33,6 +35,13 @@ from .const import (
     TEMP_MIN,
 )
 from .coordinator import Samsung2878Coordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+# Coalesce a burst of target-temperature changes (e.g. dragging the dial) into
+# a single write of the final value, instead of one slow TLS round-trip per
+# intermediate step. The UI still updates instantly via the optimistic state.
+TEMP_DEBOUNCE_SECONDS = 1.0
 
 
 async def async_setup_entry(
@@ -72,6 +81,8 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
     ) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = entry.data[CONF_MAC]
+        self._pending_temp: int | None = None
+        self._temp_debouncer: Debouncer | None = None
         # Limit swing modes to those the user marked as physically supported.
         # Many wall-mount units have only a vertical louver; an empty/absent
         # option falls back to all modes for backwards compatibility.
@@ -87,6 +98,19 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
             manufacturer="Samsung",
             model="AC 2878 (AR12HSFSAWKN)",
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Create the temperature debouncer once hass is available."""
+        await super().async_added_to_hass()
+        self._temp_debouncer = Debouncer(
+            self.hass,
+            _LOGGER,
+            cooldown=TEMP_DEBOUNCE_SECONDS,
+            immediate=False,
+            function=self._async_flush_pending_temp,
+        )
+        # Cancel any pending send if the entity is removed mid-debounce.
+        self.async_on_remove(self._temp_debouncer.async_cancel)
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -157,20 +181,43 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
             return
 
         if not self.coordinator.data.power:
-            await self.coordinator.client.set_power(True)
+            await self.coordinator.send_command(
+                self.coordinator.client.set_power, True,
+                optimistic={"power": True},
+            )
         await self.coordinator.send_command(
             self.coordinator.client.set_mode, ac_mode,
             optimistic={"power": True, "mode": ac_mode},
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set target temperature."""
+        """Set target temperature.
+
+        Reflect the new setpoint optimistically right away for a responsive
+        UI, but debounce the actual network write: a dial drag fires many
+        set_temperature calls in a burst and we only want to send the final
+        value over the slow serial link, not queue one command per step.
+        """
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
+        temp = int(temp)
+        self._pending_temp = temp
+        if self.coordinator.data:
+            self.coordinator.data.target_temp = temp
+            self.coordinator.async_set_updated_data(self.coordinator.data)
+        if self._temp_debouncer is not None:
+            await self._temp_debouncer.async_call()
+        else:  # pragma: no cover - debouncer is set in async_added_to_hass
+            await self._async_flush_pending_temp()
+
+    async def _async_flush_pending_temp(self) -> None:
+        """Send the most recent pending target temperature to the AC."""
+        temp = self._pending_temp
+        if temp is None:
+            return
         await self.coordinator.send_command(
-            self.coordinator.client.set_temperature, int(temp),
-            optimistic={"target_temp": int(temp)},
+            self.coordinator.client.set_temperature, temp,
         )
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:

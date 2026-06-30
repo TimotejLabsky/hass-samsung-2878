@@ -7,6 +7,7 @@ import logging
 import re
 import ssl
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,7 +17,10 @@ CERT_PATH = Path(__file__).parent / "ac14k_m.pem"
 
 CONNECT_TIMEOUT = 10
 IO_TIMEOUT = 10
-MAX_RESPONSE_LINES = 10
+
+# Type of the callback the coordinator registers to receive real-time push
+# <Update> attributes off the background reader loop.
+PushCallback = Callable[[dict[str, str]], None]
 
 # Placeholders the AC sends for registers it does not implement. Kept in sync
 # with const.SENTINEL_VALUES, duplicated here so the CLI can load client.py
@@ -183,13 +187,44 @@ class Samsung2878Client:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._authenticated = False
-        self._last_push_attrs: dict[str, str] = {}
         self._ssl_context: ssl.SSLContext | None = None
+        # A single background task owns every read on the socket and dispatches
+        # each line to either the in-flight command (via _pending_response) or
+        # the push callback. This lets the AC's unsolicited <Update> messages be
+        # applied in real time, and means reads are never issued concurrently.
+        self._reader_task: asyncio.Task[None] | None = None
+        self._pending_response: tuple[str | None, asyncio.Future[str]] | None = None
+        self._push_callback: PushCallback | None = None
+        # Serializes command submission so only one response is ever awaited at
+        # a time (writes go out one-at-a-time; the reader loop fulfils them).
+        self._io_lock = asyncio.Lock()
 
     @property
     def connected(self) -> bool:
-        """Return True if connected and authenticated."""
-        return self._writer is not None and self._authenticated
+        """Return True if connected, authenticated and the reader is alive."""
+        return (
+            self._writer is not None
+            and self._authenticated
+            and self._reader_task is not None
+            and not self._reader_task.done()
+        )
+
+    def set_push_callback(self, callback: PushCallback | None) -> None:
+        """Register a callback invoked with attrs from each push <Update>."""
+        self._push_callback = callback
+
+    @staticmethod
+    def merge_push(
+        current: Samsung2878State, attrs: dict[str, str]
+    ) -> Samsung2878State:
+        """Return a new state: ``current`` overlaid with push ``attrs``.
+
+        Push <Update> messages carry only the registers that changed, so they
+        are merged over the last full snapshot's raw attributes and re-parsed.
+        """
+        merged = dict(current.raw)
+        merged.update(attrs)
+        return _parse_state(merged)
 
     @staticmethod
     def _create_ssl_context() -> ssl.SSLContext:
@@ -256,6 +291,9 @@ class Samsung2878Client:
                 )
 
             self._authenticated = True
+            # Hand the socket over to the background reader for the rest of the
+            # session. All inline reads above happen before it starts.
+            self._start_reader()
             _LOGGER.debug("Authenticated successfully")
 
         except Samsung2878Error:
@@ -265,9 +303,45 @@ class Samsung2878Client:
                 f"Authentication error: {err}"
             ) from err
 
+    async def ensure_connected(self) -> None:
+        """Connect and authenticate if not already, atomically.
+
+        Idempotent and guarded by ``_io_lock`` so a reconnect can never
+        interleave with an in-flight command on the shared socket. HA callers
+        should use this rather than calling ``connect``/``authenticate``
+        directly (the CLI, which is single-task, still uses those).
+        """
+        if self.connected:
+            return
+        async with self._io_lock:
+            # Re-check under the lock: another task may have reconnected while
+            # we waited.
+            if self.connected:
+                return
+            # Tear down any half-dead connection (e.g. the reader loop exited on
+            # EOF) before opening a fresh one.
+            await self.disconnect()
+            await self.connect()
+            await self.authenticate()
+
     async def disconnect(self) -> None:
-        """Close the connection."""
+        """Close the connection and stop the reader loop."""
         self._authenticated = False
+
+        task = self._reader_task
+        self._reader_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Unblock any command still waiting on a response.
+        self._fail_pending(Samsung2878ConnectionError("Disconnected"))
+
         if self._writer is not None:
             try:
                 self._writer.close()
@@ -280,14 +354,20 @@ class Samsung2878Client:
         _LOGGER.debug("Disconnected")
 
     async def get_status(self) -> Samsung2878State:
-        """Request and parse the current AC state."""
+        """Request and parse the current AC state.
+
+        Raises on an empty/garbage response rather than parsing it into a
+        defaulted state: a missing register would otherwise read back as e.g.
+        power Off / 24 °C and clobber the real state. Raising lets the
+        coordinator keep the last good snapshot and retry/reconnect instead.
+        """
         xml = f'<Request Type="DeviceState" DUID="{self._duid}"></Request>\r\n'
         response = await self._send_command(xml, "DeviceState")
+        if not response:
+            raise Samsung2878ConnectionError("No DeviceState response received")
         attrs = self._parse_attrs(response)
-        # Merge any push updates received since last poll
-        if self._last_push_attrs:
-            attrs.update(self._last_push_attrs)
-            self._last_push_attrs.clear()
+        if not attrs:
+            raise Samsung2878ConnectionError("Unparseable DeviceState response")
         return _parse_state(attrs)
 
     async def set_power(self, on: bool) -> None:
@@ -432,47 +512,103 @@ class Samsung2878Client:
     async def _send_command(
         self, xml: str, response_type: str | None = None
     ) -> str:
-        """Send XML command and read the matching response.
+        """Send an XML command and await its <Response>.
 
-        The AC can send unsolicited <Update> push messages at any time.
-        This method skips those and returns the first <Response> line
-        (optionally matching response_type). Skipped Update messages
-        with state data are stored for the next get_status() call.
+        The background reader owns the socket and resolves the future stored in
+        ``_pending_response`` when the matching <Response> arrives; unsolicited
+        <Update> pushes are dispatched to the callback instead. ``_io_lock``
+        keeps commands one-at-a-time so only a single response is ever awaited.
         """
-        if self._writer is None or self._reader is None:
-            raise Samsung2878ConnectionError("Not connected")
-        if not self._authenticated:
-            raise Samsung2878ConnectionError("Not authenticated")
+        async with self._io_lock:
+            if not self.connected or self._writer is None:
+                raise Samsung2878ConnectionError("Not connected")
 
-        self._writer.write(xml.encode())
-        await self._writer.drain()
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[str] = loop.create_future()
+            self._pending_response = (response_type, future)
+            try:
+                self._writer.write(xml.encode())
+                await self._writer.drain()
+                return await asyncio.wait_for(future, IO_TIMEOUT)
+            except asyncio.TimeoutError as err:
+                raise Samsung2878ConnectionError("Response timeout") from err
+            except Samsung2878Error:
+                raise
+            except OSError as err:
+                raise Samsung2878ConnectionError(f"Write error: {err}") from err
+            finally:
+                self._pending_response = None
 
-        for _ in range(MAX_RESPONSE_LINES):
-            line = await self._read_line()
+    def _start_reader(self) -> None:
+        """Launch the background reader loop if not already running."""
+        if self._reader_task is None or self._reader_task.done():
+            self._reader_task = asyncio.create_task(self._read_loop())
 
-            if "<Update " in line:
-                # Capture state from push updates
-                update_attrs = self._parse_attrs(line)
-                if update_attrs:
-                    self._last_push_attrs.update(update_attrs)
-                    _LOGGER.debug("Captured push update: %s", update_attrs)
-                continue
+    async def _read_loop(self) -> None:
+        """Read every line from the socket and dispatch it.
 
-            if "<Response " in line:
-                if response_type and f'Type="{response_type}"' not in line:
-                    _LOGGER.debug(
-                        "Skipping mismatched response: %s", line
-                    )
+        Runs for the life of the connection. <Response> lines fulfil the
+        in-flight command; <Update> pushes are forwarded to the registered
+        callback so remote/app changes reach HA without waiting for the poll.
+        EOF or any read error ends the loop and marks us disconnected; the
+        coordinator reconnects on its next poll or command.
+        """
+        reader = self._reader
+        if reader is None:
+            return
+        try:
+            while True:
+                data = await reader.readline()
+                if not data:
+                    _LOGGER.debug("AC closed the connection")
+                    break
+                line = data.decode("utf-8", errors="replace").strip()
+                if not line:
                     continue
-                return line
 
-            # Unknown line (e.g. DPLUG greeting), skip
-            _LOGGER.debug("Skipping unexpected line: %s", line)
+                if "<Update " in line:
+                    attrs = self._parse_attrs(line)
+                    if attrs:
+                        _LOGGER.debug("Push update: %s", attrs)
+                        callback = self._push_callback
+                        if callback is not None:
+                            try:
+                                callback(attrs)
+                            except Exception:  # noqa: BLE001
+                                _LOGGER.exception("Push callback raised")
+                elif "<Response " in line:
+                    self._deliver_response(line)
+                else:
+                    _LOGGER.debug("Ignoring line: %s", line)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Reader loop stopped: %s", err)
+        finally:
+            self._authenticated = False
+            self._fail_pending(Samsung2878ConnectionError("Connection lost"))
 
-        _LOGGER.warning(
-            "No matching response after %d lines", MAX_RESPONSE_LINES
-        )
-        return ""
+    def _deliver_response(self, line: str) -> None:
+        """Fulfil the in-flight command future with a matching <Response>."""
+        pending = self._pending_response
+        if pending is None:
+            _LOGGER.debug("Dropping unsolicited response: %s", line)
+            return
+        response_type, future = pending
+        if response_type and f'Type="{response_type}"' not in line:
+            _LOGGER.debug("Ignoring mismatched response: %s", line)
+            return
+        if not future.done():
+            future.set_result(line)
+
+    def _fail_pending(self, err: Exception) -> None:
+        """Propagate a connection error to a command awaiting a response."""
+        pending = self._pending_response
+        if pending is not None:
+            _, future = pending
+            if not future.done():
+                future.set_exception(err)
+        self._pending_response = None
 
     async def _read_line(self) -> str:
         """Read a single line from the connection."""
