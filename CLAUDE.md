@@ -24,18 +24,18 @@ python3 samsung_ac_cli.py on|off|mode|temp|fan|swing|preset|sleep|info|raw
 ```
 HA Entities (climate, sensor, switch, number, select, button)
         │
-Samsung2878Coordinator   (DataUpdateCoordinator, 30s poll, optimistic updates)
+Samsung2878Coordinator   (DataUpdateCoordinator, 20s poll/keepalive, optimistic + real-time push)
         │
 Samsung2878Client        (pure asyncio TCP/TLS, no HA dependency)
         │
 Samsung AC on port 2878  (line-delimited XML over TLS 1.0, mutual TLS)
 ```
 
-**`Samsung2878Client`** (`client.py`): Pure asyncio TCP/TLS client. Handles the 3-step auth handshake (greeting → InvalidateAccount → AuthToken). Manages persistent connection, skips unsolicited `<Update>` push messages during command/response cycles, caches them in `_last_push_attrs`. Also used by the CLI tool (loaded via `importlib` to avoid HA imports).
+**`Samsung2878Client`** (`client.py`): Pure asyncio TCP/TLS client. Handles the 3-step auth handshake (greeting → InvalidateAccount → AuthToken). After auth, a single background reader task (`_read_loop`) owns all socket reads and dispatches each line: `<Response>` lines fulfil the in-flight command's future (`_pending_response`), unsolicited `<Update>` pushes go to a registered callback. `_io_lock` serializes command submission so only one response is awaited at a time. Reads are never issued concurrently. Also used by the CLI tool (loaded via `importlib` to avoid HA imports).
 
 **`Samsung2878State`** (`client.py`): Dataclass holding parsed AC state. Notable parsing: outdoor temp = raw − 55, energy = raw ÷ 10.0, temp_set 0 → 24 default.
 
-**`Samsung2878Coordinator`** (`coordinator.py`): Wraps the client. Auto-reconnects on poll if disconnected. Fetches firmware versions once per connection. `send_command()` supports optimistic state updates for instant UI feedback.
+**`Samsung2878Coordinator`** (`coordinator.py`): Wraps the client. `ensure_connected()` auto-reconnects on both poll and command. The poll doubles as a keepalive that keeps the socket warm for push. `_handle_push()` applies real-time `<Update>` messages (remote/app changes) via `merge_push` + `async_update_listeners` (without rescheduling the poll). `send_command()` supports optimistic state updates and reconnect-and-retry-once.
 
 **`Samsung2878Climate`** (`climate.py`): Primary control entity. Uses MAC as unique_id.
 

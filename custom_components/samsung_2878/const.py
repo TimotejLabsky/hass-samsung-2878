@@ -11,7 +11,11 @@ from homeassistant.components.climate import (
 DOMAIN = "samsung_2878"
 
 DEFAULT_PORT = 2878
-DEFAULT_POLL_INTERVAL = 30
+# The AC drops its TLS socket after a short idle period. The poll doubles as a
+# keepalive: a shorter interval keeps the connection warm so real-time push
+# <Update> messages (remote/app changes) keep flowing between polls. Raise it
+# to reduce traffic if your unit tolerates longer idles.
+DEFAULT_POLL_INTERVAL = 20
 TEMP_MIN = 16
 TEMP_MAX = 30
 
