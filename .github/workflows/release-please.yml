@@ -1,0 +1,22 @@
+name: release-please
+
+# Derives the next version from Conventional Commit messages on main and keeps
+# an open "release PR" (version bump in manifest.json + CHANGELOG.md). Merging
+# that PR tags vX.Y.Z and publishes the GitHub release, which HACS then offers.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
