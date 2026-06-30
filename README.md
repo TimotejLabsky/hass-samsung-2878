@@ -18,6 +18,7 @@ Fully async, config-flow based replacement for the legacy [samsungrac](https://g
 - Swing modes: Off, Vertical, Horizontal, Both
 - Presets: Quiet, Sleep, Smart, SoftCool
 - Current & outdoor temperature sensors
+- Real-time updates: changes made on the physical remote / SmartThings app appear in HA via push, with polling as a fallback
 - HACS compatible
 
 ## Installation
@@ -58,3 +59,16 @@ See [PROTOCOL.md](PROTOCOL.md) for detailed protocol documentation.
 ## Supported Models
 
 Tested with Samsung AR12HSFSAWKN (AC14K / Jungfrau variant). Should work with other Samsung ACs that use port 2878 and the Jungfrau protocol variant.
+
+## Contributing & Releases
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please), driven by [Conventional Commits](https://www.conventionalcommits.org/). PRs are squash-merged, so the **PR title** becomes the commit and determines the next version:
+
+| PR title prefix | Result |
+| --- | --- |
+| `fix: …` | patch release (e.g. `1.3.0` → `1.3.1`) |
+| `feat: …` | minor release (`1.3.0` → `1.4.0`) |
+| `feat!: …` or a `BREAKING CHANGE:` footer | major release (`1.3.0` → `2.0.0`) |
+| `docs:`, `ci:`, `chore:`, `refactor:`, `test:` | no release |
+
+release-please keeps an open **release PR** that bumps the version in `manifest.json` and updates `CHANGELOG.md`. Merging that release PR tags `vX.Y.Z`, publishes the GitHub release, and HACS then offers the update. Every PR is also validated by `hassfest` and the HACS action.
