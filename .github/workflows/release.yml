@@ -1,0 +1,39 @@
+name: Release
+
+# Publishes a GitHub release whenever the integration's manifest version is
+# bumped on main. Flow: bump version in a PR -> merge -> release appears ->
+# HACS offers the update. Idempotent: re-running for an existing tag no-ops.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "custom_components/**/manifest.json"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read manifest version
+        id: ver
+        run: |
+          version="$(jq -r .version custom_components/samsung_2878/manifest.json)"
+          echo "v=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create release if the tag is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.ver.outputs.v }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — skipping."
+            exit 0
+          fi
+          gh release create "$tag" \
+            --title "$tag" \
+            --generate-notes \
+            --target "$GITHUB_SHA"
