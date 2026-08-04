@@ -83,6 +83,9 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
         self._attr_unique_id = entry.data[CONF_MAC]
         self._pending_temp: int | None = None
         self._temp_debouncer: Debouncer | None = None
+        # Last unmappable direction we warned about, so a stuck register does
+        # not log on every coordinator refresh.
+        self._warned_swing_direction: str | None = None
         # Limit swing modes to those the user marked as physically supported.
         # Many wall-mount units have only a vertical louver; an empty/absent
         # option falls back to all modes for backwards compatibility.
@@ -154,10 +157,24 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
 
     @property
     def swing_mode(self) -> str | None:
-        """Return the current swing mode."""
-        return SWING_MODE_MAP.get(
-            self.coordinator.data.swing_mode, "Off"
-        )
+        """Return the current swing mode.
+
+        A direction the map does not know — in practice "NotSupported", which
+        the AC parks the register at after being written a token its firmware
+        does not implement — is reported as unknown rather than coerced to
+        "off". Coercing it hid rejected writes: the UI showed a tidy "off"
+        while the unit had no valid airflow direction set.
+        """
+        raw = self.coordinator.data.swing_mode
+        mode = SWING_MODE_MAP.get(raw)
+        if mode is None and raw != self._warned_swing_direction:
+            self._warned_swing_direction = raw
+            _LOGGER.warning(
+                "AC reports airflow direction %r, which it does not implement; "
+                "the last swing command was rejected by the unit",
+                raw,
+            )
+        return mode
 
     @property
     def preset_mode(self) -> str | None:
@@ -229,7 +246,7 @@ class Samsung2878Climate(CoordinatorEntity[Samsung2878Coordinator], ClimateEntit
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set swing mode."""
-        ac_swing = SWING_MODE_REVERSE.get(swing_mode, "Off")
+        ac_swing = SWING_MODE_REVERSE.get(swing_mode, "Fixed")
         await self.coordinator.send_command(
             self.coordinator.client.set_swing_mode, ac_swing,
             optimistic={"swing_mode": ac_swing},
