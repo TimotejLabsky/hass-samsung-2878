@@ -119,8 +119,10 @@ def _parse_state(attrs: dict[str, str]) -> Samsung2878State:
             state.outdoor_temp = None
 
     # Error
+    # "NULL" is what this firmware reports for "no fault"; without it the
+    # error sensor shows the literal string NULL instead of OK.
     error = attrs.get("AC_FUN_ERROR", "")
-    if error in ("00000", "", "00", "0"):
+    if error in ("00000", "", "00", "0", "NULL"):
         state.error = ""
     else:
         state.error = error

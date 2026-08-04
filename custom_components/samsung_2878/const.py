@@ -46,6 +46,11 @@ HVAC_MODE_REVERSE: dict[HVACMode, str] = {v: k for k, v in HVAC_MODE_MAP.items()
 # Fan modes (sent as-is to the AC)
 FAN_MODES = ["Auto", "Low", "Mid", "High", "Turbo"]
 
+# The value the AC parks AC_FUN_DIRECTION at when it is written a token the
+# firmware does not implement. It is sticky: the register stays here until a
+# valid token is written, so it must not be mistaken for a real direction.
+DIRECTION_NOT_SUPPORTED = "NotSupported"
+
 # Samsung direction values -> HA swing mode
 SWING_MODE_MAP: dict[str, str] = {
     "Off": SWING_OFF,
@@ -54,8 +59,21 @@ SWING_MODE_MAP: dict[str, str] = {
     "SwingLR": SWING_HORIZONTAL,
     "Rotation": SWING_BOTH,
 }
+# HA swing mode -> Samsung direction value.
+#
+# "off" must be sent as "Fixed", NOT "Off". Verified against the AR12HSFS:
+# writing AC_FUN_DIRECTION="Off" is answered Status="Okay" but leaves the
+# register at "NotSupported", where it stays until a valid token is written.
+# Because SWING_MODE_MAP has no entry for "NotSupported", that used to read
+# back as "off" — so turning swing off looked like it worked while the unit
+# was actually left with no valid airflow direction at all, and the next
+# swing command had to recover from that state. "Fixed" is the token the
+# firmware accepts for "no swing" and it reads back cleanly.
+#
+# Accepted tokens on this firmware: Fixed, SwingUD, SwingLR, Rotation.
+# Everything else (Off, Direct, Indirect, Up_And_Low, All, ...) -> NotSupported.
 SWING_MODE_REVERSE: dict[str, str] = {
-    SWING_OFF: "Off",
+    SWING_OFF: "Fixed",
     SWING_VERTICAL: "SwingUD",
     SWING_HORIZONTAL: "SwingLR",
     SWING_BOTH: "Rotation",
