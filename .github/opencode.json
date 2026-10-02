@@ -1,0 +1,58 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LiteLLM Gateway (in-cluster)",
+      "options": {
+        "baseURL": "http://litellm.ai.svc.cluster.local:4000/v1",
+        "apiKey": "sk-local",
+        "timeout": 1800000,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "Qwen3.8-27B-8bit": {
+          "name": "Qwen3.8-27B-8bit",
+          "options": {
+            "reasoningEffort": "xhigh",
+            "reasoningSummary": "auto",
+            "temperature": 1.0,
+            "topP": 0.95
+          },
+          "limit": {
+            "context": 180224,
+            "output": 16384
+          }
+        },
+        "Qwen3.8-27B-4bit": {
+          "name": "Qwen3.8-27B-4bit",
+          "options": {
+            "reasoningEffort": "medium",
+            "reasoningSummary": "auto",
+            "temperature": 1.0,
+            "topP": 0.95
+          },
+          "limit": {
+            "context": 229376,
+            "output": 16384
+          }
+        }
+      }
+    }
+  },
+  "model": "litellm/Qwen3.8-27B-8bit",
+  "instructions": [
+    ".github/opencode-instructions.md"
+  ],
+  "agent": {
+    "coder": {
+      "steps": 30
+    },
+    "task": {
+      "steps": 30
+    },
+    "plan": {
+      "steps": 15
+    }
+  }
+}

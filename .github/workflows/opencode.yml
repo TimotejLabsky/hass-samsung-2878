@@ -1,0 +1,62 @@
+# opencode GitHub agent: comment `/oc <task>` (or `/opencode <task>`) on an
+# issue or PR and opencode runs it on the home-cluster ARC runner against the
+# local LiteLLM gateway (Mac Studio models). Mirrors
+# TimotejLabsky/personal-infratructure .github/workflows/opencode.yml.
+#
+# - Author-gated to TimotejLabsky (the agent has contents:write).
+# - FIFO "Wait for earlier opencode runs" step instead of a `concurrency:` group:
+#   GitHub cancels older pending runs in a group, silently dropping comments.
+# - PRs opened with GITHUB_TOKEN don't trigger the validate workflow; close and
+#   reopen the PR to kick CI.
+name: opencode
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  opencode:
+    if: |
+      github.event.comment.user.login == 'TimotejLabsky' &&
+      (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode'))
+    runs-on: arc-runner-hass-samsung-2878
+    timeout-minutes: 180   # incl. queue wait; the agent step itself is capped at 45
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Wait for earlier opencode runs
+        timeout-minutes: 150
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          while :; do
+            n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/$REPO/actions/workflows/opencode.yml/runs?per_page=50" \
+                | jq --argjson me "$RUN_ID" '[.workflow_runs[] | select(.id < $me and .status != "completed")] | length')
+            [ "$n" -eq 0 ] && break
+            echo "waiting for $n earlier opencode run(s)…"
+            sleep 30
+          done
+
+      - uses: actions/checkout@v4
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - uses: anomalyco/opencode/github@latest
+        timeout-minutes: 45
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCODE_CONFIG: ${{ github.workspace }}/.github/opencode.json
+        with:
+          model: litellm/Qwen3.8-27B-8bit
+          use_github_token: true
