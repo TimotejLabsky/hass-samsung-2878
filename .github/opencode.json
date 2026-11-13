@@ -6,7 +6,7 @@
       "name": "LiteLLM Gateway (in-cluster)",
       "options": {
         "baseURL": "http://litellm.ai.svc.cluster.local:4000/v1",
-        "apiKey": "sk-local",
+        "apiKey": "{env:LITELLM_API_KEY}",
         "timeout": 1800000,
         "chunkTimeout": 900000
       },
