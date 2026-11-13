@@ -57,6 +57,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCODE_CONFIG: ${{ github.workspace }}/.github/opencode.json
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}   # .github/opencode.json {env:...}
         with:
           model: litellm/Qwen3.8-27B-8bit
           use_github_token: true
